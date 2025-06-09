@@ -1,0 +1,128 @@
+#!/bin/bash
+
+# Colors
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+PURPLE='\033[0;35m'
+NC='\033[0m' # No Color
+
+# Header
+echo
+echo -e "${PURPLE}-------------------------[Linux Security Audit in Progress]-------------------------${NC}"
+echo
+
+# Function to check and display status
+check_status() {
+    local description="$1"
+    local check_cmd="$2"
+    local good_pattern="$3"
+    shift 3
+    
+    local signature=$(eval "$check_cmd" 2>/dev/null)
+    local status
+    
+    if [ $# -eq 0 ]; then
+        # Simple numeric comparison
+        if [ "$signature" -eq 0 ]; then
+            status="${RED}[ BAD ]${NC}"
+        else
+            status="${GREEN}[ GOOD ]${NC}"
+        fi
+    else
+        # Pattern matching
+        if echo "$signature" | grep -qP "$good_pattern"; then
+            status="${GREEN}[ GOOD ]${NC}"
+        else
+            status="${RED}[ BAD ]${NC}"
+        fi
+    fi
+    
+    # Format description to fixed width
+    printf "%-75s %-10b\n" "${description}" "${status}"
+}
+
+# Password Policies
+echo -e "${YELLOW}=== Password Policies ===${NC}"
+check_status "[*] Checking Maximum number of days of password usage" \
+             "grep -cP '^PASS_MAX_DAYS\s+365$' /etc/login.defs" ""
+check_status "[*] Checking Minimum number of days between password changes" \
+             "grep -cP '^PASS_MIN_DAYS\s+360$' /etc/login.defs" ""
+check_status "[*] Checking Number of days warning before password expiration" \
+             "grep -cP '^PASS_WARN_AGE\s+350$' /etc/login.defs" ""
+check_status "[*] Checking users locking after inactivity" \
+             "useradd -D | grep -cP '^INACTIVE=30$'" ""
+check_status "[*] Checking last 24 passwords is enabled" \
+             "grep -cP '.*remember=24.*' /etc/pam.d/common-password" ""
+
+# User and Group Checks
+echo
+echo -e "${YELLOW}=== User and Group Checks ===${NC}"
+check_status "[*] Checking root primary group" \
+             "id -gn root | grep -cP '^root$'" ""
+check_status "[*] Checking for empty passwords" \
+             "grep -cP '^[^:]+::' /etc/shadow" ""
+check_status "[*] Checking for legacy '+/' entries" \
+             "grep -cP '^\+:' /etc/{passwd,shadow,group} | awk '{sum+=\$1} END {print sum}'" ""
+check_status "[*] Checking for duplicate UIDs" \
+             "cut -d: -f3 /etc/passwd | sort | uniq -d | wc -l" ""
+check_status "[*] Checking for duplicate GIDs" \
+             "cut -d: -f3 /etc/group | sort | uniq -d | wc -l" ""
+
+# PAM Configuration
+echo
+echo -e "${YELLOW}=== PAM Configuration ===${NC}"
+check_status "[*] Checking libpam-cracklib installation" \
+             "dpkg-query -W -f='\${Status}' libpam-cracklib 2>/dev/null | grep -c 'ok installed'" ""
+check_status "[*] Checking minimum password length (minlen=12)" \
+             "grep -P 'password.*pam_cracklib.so' /etc/pam.d/common-password" "minlen=12"
+check_status "[*] Checking if username in password is rejected" \
+             "grep -P 'password.*pam_cracklib.so' /etc/pam.d/common-password" "reject_username"
+check_status "[*] Checking password complexity requirements" \
+             "grep -P 'password.*pam_cracklib.so' /etc/pam.d/common-password" "minclass=3"
+check_status "[*] Checking if consecutive characters are limited" \
+             "grep -P 'password.*pam_cracklib.so' /etc/pam.d/common-password" "maxrepeat=3"
+check_status "[*] Checking if accounts lock after failed attempts" \
+             "grep -P 'auth.*pam_tally2.so' /etc/pam.d/login" "deny=5.*unlock_time=1200"
+check_status "[*] Checking delay between login prompts" \
+             "grep -P 'auth.*pam_faildelay.so' /etc/pam.d/login" "delay=10000000"
+
+# SSH Configuration
+echo
+echo -e "${YELLOW}=== SSH Configuration ===${NC}"
+check_status "[*] Checking SSH Protocol version (should be 2)" \
+             "grep -cP '^Protocol 2$' /etc/ssh/sshd_config" ""
+check_status "[*] Checking if root login is disabled" \
+             "grep -P '^PermitRootLogin' /etc/ssh/sshd_config" "no|prohibit-password"
+check_status "[*] Checking MaxAuthTries" \
+             "grep -P '^MaxAuthTries' /etc/ssh/sshd_config" "[1-6]$"
+check_status "[*] Checking if X11 forwarding is disabled" \
+             "grep -P '^X11Forwarding' /etc/ssh/sshd_config" "no"
+check_status "[*] Checking if empty passwords are allowed" \
+             "grep -P '^PermitEmptyPasswords' /etc/ssh/sshd_config" "no"
+
+# File System Checks
+echo
+echo -e "${YELLOW}=== File System Checks ===${NC}"
+check_status "[*] Checking for world-writable files" \
+             "find / -xdev -type f -perm -0002 | wc -l" "^0$"
+check_status "[*] Checking for unowned files" \
+             "find / -xdev -nouser | wc -l" "^0$"
+check_status "[*] Checking for ungrouped files" \
+             "find / -xdev -nogroup | wc -l" "^0$"
+check_status "[*] Checking /tmp permissions" \
+             "stat -c '%a' /tmp" "1777"
+
+# Kernel Parameters
+echo
+echo -e "${YELLOW}=== Kernel Hardening ===${NC}"
+check_status "[*] Checking ASLR status" \
+             "cat /proc/sys/kernel/randomize_va_space" "[1-2]"
+check_status "[*] Checking ICMP redirect acceptance" \
+             "sysctl net.ipv4.conf.all.accept_redirects" "0"
+check_status "[*] Checking IP spoofing protection" \
+             "sysctl net.ipv4.conf.all.rp_filter" "1"
+
+echo
+echo -e "${PURPLE}--------------------------[Audit Completed]--------------------------${NC}"
+echo
